@@ -10,7 +10,7 @@ on:
       - releases/*
     paths-ignore:
       - '**.md'
-      
+
 jobs:
   node-npm-depencies-caching:
     name: Test npm (Node ${{ matrix.node-version}}, ${{ matrix.os }})
@@ -18,10 +18,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        node-version: [12, 14, 16]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
+        node-version: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Clean global cache
         run: npm cache clean --force
       - name: Setup Node
@@ -41,14 +41,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        node-version: [12, 14, 16]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
+        node-version: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pnpm
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 6.10.0
+          version: 10
       - name: Generate pnpm file
         run: pnpm install
       - name: Remove dependencies
@@ -74,14 +74,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        node-version: [12, 14, 16]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
+        node-version: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Yarn version
         run: yarn --version
       - name: Generate yarn file
-        run: yarn install
+        run: yarn install --ignore-engines
       - name: Remove dependencies
         shell: pwsh
         run: Remove-Item node_modules -Force -Recurse
@@ -93,25 +93,25 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'yarn'
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --ignore-engines
       - name: Verify node and yarn
         run: __tests__/verify-node.sh "${{ matrix.node-version }}"
         shell: bash
 
-  node-yarn2-depencies-caching:
-    name: Test yarn 2 (Node ${{ matrix.node-version}}, ${{ matrix.os }})
+  node-yarn3-depencies-caching:
+    name: Test yarn 3 (Node ${{ matrix.node-version}}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
       YARN_ENABLE_IMMUTABLE_INSTALLS: false
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        node-version: [12, 14, 16]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
+        node-version: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Update yarn
-        run: yarn set version berry
+        run: yarn set version 3.6.4
       - name: Yarn version
         run: yarn --version
       - name: Generate simple .yarnrc.yml
@@ -132,5 +132,173 @@ jobs:
       - name: Install dependencies
         run: yarn install
       - name: Verify node and yarn
+        run: __tests__/verify-node.sh "${{ matrix.node-version }}"
+        shell: bash
+
+  yarn-subprojects:
+    name: Test yarn subprojects
+    strategy:
+      matrix:
+        node-version: [22, 24, 26]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: prepare sub-projects
+        run: __tests__/prepare-yarn-subprojects.sh yarn1
+
+      # expect
+      #  - no errors
+      #  - log
+      #    ##[debug]Cache Paths:
+      #    ##[debug]["sub2/.yarn/cache","sub3/.yarn/cache","../../../.cache/yarn/v6"]
+      - name: Setup Node
+        uses: ./
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'yarn'
+          cache-dependency-path: |
+            **/*.lock
+            yarn.lock
+
+  yarn-subprojects-berry-local:
+    name: Test yarn subprojects all locally managed
+    strategy:
+      matrix:
+        node-version: [22, 24, 26]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: prepare sub-projects
+        run: __tests__/prepare-yarn-subprojects.sh keepcache keepcache
+
+      # expect
+      #  - no errors
+      #  - log
+      #    ##[info]All dependencies are managed locally by yarn3, the previous cache can be used
+      #    ##[debug]["node-cache-Linux-yarn-401024703386272f1a950c9f014cbb1bb79a7a5b6e1fb00e8b90d06734af41ee","node-cache-Linux-yarn"]
+      - name: Setup Node
+        uses: ./
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'yarn'
+          cache-dependency-path: |
+            sub2/*.lock
+            sub3/*.lock
+
+  yarn-subprojects-berry-global:
+    name: Test yarn subprojects some locally managed
+    strategy:
+      matrix:
+        node-version: [22, 24, 26]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: prepare sub-projects
+        run: __tests__/prepare-yarn-subprojects.sh global
+
+      # expect
+      #  - no errors
+      #  - log must
+      #    ##[debug]"/home/runner/work/setup-node-test/setup-node-test/sub2" dependencies are managed by yarn 3 locally
+      #    ##[debug]"/home/runner/work/setup-node-test/setup-node-test/sub3" dependencies are not managed by yarn 3 locally
+      - name: Setup Node
+        uses: ./
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'yarn'
+          cache-dependency-path: |
+            sub2/*.lock
+            sub3/*.lock
+
+  yarn-subprojects-berry-git:
+    name: Test yarn subprojects managed by git
+    strategy:
+      matrix:
+        node-version: [22, 24, 26]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: prepare sub-projects
+        run: /bin/bash __tests__/prepare-yarn-subprojects.sh keepcache
+
+      # expect
+      #  - no errors
+      #  - log
+      #    [debug]"/home/runner/work/setup-node-test/setup-node-test/sub2" has .yarn/cache - dependencies are kept in the repository
+      #    [debug]"/home/runner/work/setup-node-test/setup-node-test/sub3" has .yarn/cache - dependencies are kept in the repository
+      #    [debug]["node-cache-Linux-yarn-401024703386272f1a950c9f014cbb1bb79a7a5b6e1fb00e8b90d06734af41ee"]
+      - name: Setup Node
+        uses: ./
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'yarn'
+          cache-dependency-path: |
+            sub2/*.lock
+            sub3/*.lock
+
+  node-npm-packageManager-auto-cache:
+    name: Test auto cache with top-level packageManager
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
+        node-version: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Create package.json with packageManager field
+        run: |
+          echo '{ "name": "test-project", "version": "1.0.0", "packageManager": "npm@8.0.0" }' > package.json
+      - name: Clean global cache
+        run: npm cache clean --force
+      - name: Setup Node with caching enabled
+        uses: ./
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install dependencies
+        run: npm install
+      - name: Verify node and npm
+        run: __tests__/verify-node.sh "${{ matrix.node-version }}"
+        shell: bash
+
+  node-npm-devEngines-auto-cache:
+    name: Test auto cache with devEngines.packageManager
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
+        node-version: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Create package.json with devEngines field
+        run: |
+          echo '{
+            "name": "test-project",
+            "version": "1.0.0",
+            "devEngines": {
+              "packageManager": {
+                "name": "npm",
+                "onFail": "error"
+              }
+            }
+          }' > package.json
+      - name: Clean global cache
+        run: npm cache clean --force
+      - name: Setup Node with caching enabled
+        uses: ./
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install dependencies
+        run: npm install
+      - name: Verify node and npm
         run: __tests__/verify-node.sh "${{ matrix.node-version }}"
         shell: bash

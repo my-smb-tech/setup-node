@@ -1,25 +1,60 @@
-import os = require('os');
-import * as fs from 'fs';
+import {
+  jest,
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterAll
+} from '@jest/globals';
+import {fileURLToPath} from 'url';
+import os from 'os';
+import fs from 'fs';
 import * as path from 'path';
-import * as core from '@actions/core';
 import * as io from '@actions/io';
-import * as auth from '../src/authutil';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+jest.unstable_mockModule('@actions/core', () => ({
+  info: jest.fn(),
+  warning: jest.fn(),
+  debug: jest.fn(),
+  error: jest.fn(),
+  notice: jest.fn(),
+  setFailed: jest.fn(),
+  setOutput: jest.fn(),
+  getInput: jest.fn((name: string) => {
+    const val =
+      process.env[`INPUT_${name.replace(/ /g, '_').toUpperCase()}`] || '';
+    return val.trim();
+  }),
+  getBooleanInput: jest.fn(),
+  getMultilineInput: jest.fn(),
+  addPath: jest.fn(),
+  exportVariable: jest.fn(),
+  saveState: jest.fn(),
+  getState: jest.fn(),
+  setSecret: jest.fn(),
+  isDebug: jest.fn(() => false),
+  startGroup: jest.fn(),
+  endGroup: jest.fn(),
+  group: jest.fn((_name: string, fn: () => Promise<unknown>) => fn())
+}));
+
+// Dynamic imports AFTER mocking so authutil sees the mocked core.
+const core = await import('@actions/core');
+const auth = await import('../src/authutil.js');
 
 let rcFile: string;
 
 describe('authutil tests', () => {
   const _runnerDir = path.join(__dirname, 'runner');
 
-  let cnSpy: jest.SpyInstance;
-  let logSpy: jest.SpyInstance;
-  let dbgSpy: jest.SpyInstance;
+  let cnSpy: jest.SpiedFunction<typeof process.stdout.write>;
+  let logSpy: jest.SpiedFunction<typeof console.log>;
 
   beforeAll(async () => {
-    const randPath = path.join(
-      Math.random()
-        .toString(36)
-        .substring(7)
-    );
+    const randPath = path.join(Math.random().toString(36).substring(7));
     console.log('::stop-commands::stoptoken'); // Disable executing of runner commands when running tests in actions
     process.env['GITHUB_ENV'] = ''; // Stub out Environment file functionality so we can verify it writes to standard out (toolkit is backwards compatible)
     const tempDir = path.join(_runnerDir, randPath, 'temp');
@@ -40,19 +75,8 @@ describe('authutil tests', () => {
     // writes
     cnSpy = jest.spyOn(process.stdout, 'write');
     logSpy = jest.spyOn(console, 'log');
-    dbgSpy = jest.spyOn(core, 'debug');
-    cnSpy.mockImplementation(line => {
-      // uncomment to debug
-      // process.stderr.write('write:' + line + '\n');
-    });
-    logSpy.mockImplementation(line => {
-      // uncomment to debug
-      // process.stderr.write('log:' + line + '\n');
-    });
-    dbgSpy.mockImplementation(msg => {
-      // uncomment to see debug output
-      // process.stderr.write(msg + '\n');
-    });
+    cnSpy.mockImplementation(() => true);
+    logSpy.mockImplementation(() => {});
   }, 100000);
 
   function dbg(message: string) {
@@ -67,10 +91,10 @@ describe('authutil tests', () => {
   }, 100000);
 
   function readRcFile(rcFile: string) {
-    let rc = {};
-    let contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
+    const rc = {};
+    const contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
     for (const line of contents.split(os.EOL)) {
-      let parts = line.split('=');
+      const parts = line.split('=');
       if (parts.length == 2) {
         rc[parts[0].trim()] = parts[1].trim();
       }
@@ -79,57 +103,148 @@ describe('authutil tests', () => {
   }
 
   it('Sets up npmrc for npmjs', async () => {
-    await auth.configAuthentication('https://registry.npmjs.org/', 'false');
+    await auth.configAuthentication('https://registry.npmjs.org/');
 
     expect(fs.statSync(rcFile)).toBeDefined();
-    let contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
-    let rc = readRcFile(rcFile);
+    const contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
+    const rc = readRcFile(rcFile);
     expect(rc['registry']).toBe('https://registry.npmjs.org/');
-    expect(rc['always-auth']).toBe('false');
   });
 
   it('Appends trailing slash to registry', async () => {
-    await auth.configAuthentication('https://registry.npmjs.org', 'false');
+    await auth.configAuthentication('https://registry.npmjs.org');
 
     expect(fs.statSync(rcFile)).toBeDefined();
-    let rc = readRcFile(rcFile);
+    const rc = readRcFile(rcFile);
     expect(rc['registry']).toBe('https://registry.npmjs.org/');
-    expect(rc['always-auth']).toBe('false');
   });
 
   it('Configures scoped npm registries', async () => {
     process.env['INPUT_SCOPE'] = 'myScope';
-    await auth.configAuthentication('https://registry.npmjs.org', 'false');
+    await auth.configAuthentication('https://registry.npmjs.org');
 
     expect(fs.statSync(rcFile)).toBeDefined();
-    let rc = readRcFile(rcFile);
+    const rc = readRcFile(rcFile);
     expect(rc['@myscope:registry']).toBe('https://registry.npmjs.org/');
-    expect(rc['always-auth']).toBe('false');
   });
 
   it('Automatically configures GPR scope', async () => {
-    await auth.configAuthentication('npm.pkg.github.com', 'false');
+    await auth.configAuthentication('npm.pkg.github.com');
 
     expect(fs.statSync(rcFile)).toBeDefined();
-    let rc = readRcFile(rcFile);
+    const rc = readRcFile(rcFile);
     expect(rc['@ownername:registry']).toBe('npm.pkg.github.com/');
-    expect(rc['always-auth']).toBe('false');
   });
 
-  it('Sets up npmrc for always-auth true', async () => {
-    await auth.configAuthentication('https://registry.npmjs.org/', 'true');
-    expect(fs.statSync(rcFile)).toBeDefined();
-    let rc = readRcFile(rcFile);
-    expect(rc['registry']).toBe('https://registry.npmjs.org/');
-    expect(rc['always-auth']).toBe('true');
-  });
-  it('It is already set the NODE_AUTH_TOKEN export it ', async () => {
+  it('is already set the NODE_AUTH_TOKEN export it', async () => {
     process.env.NODE_AUTH_TOKEN = 'foobar';
-    await auth.configAuthentication('npm.pkg.github.com', 'false');
+    await auth.configAuthentication('npm.pkg.github.com');
     expect(fs.statSync(rcFile)).toBeDefined();
-    let rc = readRcFile(rcFile);
+    const rc = readRcFile(rcFile);
     expect(rc['@ownername:registry']).toBe('npm.pkg.github.com/');
-    expect(rc['always-auth']).toBe('false');
     expect(process.env.NODE_AUTH_TOKEN).toEqual('foobar');
+  });
+
+  it('should not export NODE_AUTH_TOKEN if not set in environment', async () => {
+    const exportSpy = core.exportVariable as jest.Mock;
+    exportSpy.mockClear();
+    delete process.env.NODE_AUTH_TOKEN;
+    await auth.configAuthentication('https://registry.npmjs.org/');
+    expect(fs.statSync(rcFile)).toBeDefined();
+    const rc = readRcFile(rcFile);
+    expect(rc['registry']).toBe('https://registry.npmjs.org/');
+    expect(exportSpy).not.toHaveBeenCalledWith(
+      'NODE_AUTH_TOKEN',
+      expect.anything()
+    );
+  });
+
+  it('should export NODE_AUTH_TOKEN if set to empty string', async () => {
+    const exportSpy = core.exportVariable as jest.Mock;
+    exportSpy.mockClear();
+    process.env.NODE_AUTH_TOKEN = '';
+    await auth.configAuthentication('https://registry.npmjs.org/');
+    expect(fs.statSync(rcFile)).toBeDefined();
+    expect(exportSpy).toHaveBeenCalledWith('NODE_AUTH_TOKEN', '');
+  });
+
+  it('configAuthentication should overwrite non-scoped with non-scoped', async () => {
+    fs.writeFileSync(rcFile, 'registry=NNN');
+    await auth.configAuthentication('https://registry.npmjs.org/');
+    const contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
+    expect(contents).toBe(
+      `//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}${os.EOL}registry=https://registry.npmjs.org/`
+    );
+  });
+
+  it('configAuthentication should overwrite only non-scoped', async () => {
+    fs.writeFileSync(rcFile, `registry=NNN${os.EOL}@myscope:registry=MMM`);
+    await auth.configAuthentication('https://registry.npmjs.org/');
+    const contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
+    expect(contents).toBe(
+      `@myscope:registry=MMM${os.EOL}//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}${os.EOL}registry=https://registry.npmjs.org/`
+    );
+  });
+
+  it('configAuthentication should add non-scoped to scoped', async () => {
+    fs.writeFileSync(rcFile, '@myscope:registry=NNN');
+    await auth.configAuthentication('https://registry.npmjs.org/');
+    const contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
+    expect(contents).toBe(
+      `@myscope:registry=NNN${os.EOL}//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}${os.EOL}registry=https://registry.npmjs.org/`
+    );
+  });
+
+  it('configAuthentication should overwrite scoped with scoped', async () => {
+    process.env['INPUT_SCOPE'] = 'myscope';
+    fs.writeFileSync(rcFile, `@myscope:registry=NNN`);
+    await auth.configAuthentication('https://registry.npmjs.org/');
+    const contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
+    expect(contents).toBe(
+      `//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}${os.EOL}@myscope:registry=https://registry.npmjs.org/`
+    );
+  });
+
+  it('configAuthentication should overwrite only scoped', async () => {
+    process.env['INPUT_SCOPE'] = 'myscope';
+    fs.writeFileSync(rcFile, `registry=NNN${os.EOL}@myscope:registry=MMM`);
+    await auth.configAuthentication('https://registry.npmjs.org/');
+    const contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
+    expect(contents).toBe(
+      `registry=NNN${os.EOL}//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}${os.EOL}@myscope:registry=https://registry.npmjs.org/`
+    );
+  });
+
+  it('configAuthentication should add scoped to non-scoped', async () => {
+    process.env['INPUT_SCOPE'] = 'myscope';
+    fs.writeFileSync(rcFile, `registry=MMM`);
+    await auth.configAuthentication('https://registry.npmjs.org/');
+    const contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
+    expect(contents).toBe(
+      `registry=MMM${os.EOL}//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}${os.EOL}@myscope:registry=https://registry.npmjs.org/`
+    );
+  });
+
+  it('configAuthentication should overwrite only one scoped', async () => {
+    process.env['INPUT_SCOPE'] = 'myscope';
+    fs.writeFileSync(
+      rcFile,
+      `@otherscope:registry=NNN${os.EOL}@myscope:registry=MMM`
+    );
+    await auth.configAuthentication('https://registry.npmjs.org/');
+    const contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
+    expect(contents).toBe(
+      `@otherscope:registry=NNN${os.EOL}//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}${os.EOL}@myscope:registry=https://registry.npmjs.org/`
+    );
+  });
+
+  it('configAuthentication should add scoped to another scoped', async () => {
+    process.env['INPUT_SCOPE'] = 'myscope';
+    fs.writeFileSync(rcFile, `@otherscope:registry=MMM`);
+    await auth.configAuthentication('https://registry.npmjs.org/');
+    const contents = fs.readFileSync(rcFile, {encoding: 'utf8'});
+    expect(contents).toBe(
+      `@otherscope:registry=MMM${os.EOL}//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}${os.EOL}@myscope:registry=https://registry.npmjs.org/`
+    );
   });
 });
